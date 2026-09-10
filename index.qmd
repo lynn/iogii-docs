@@ -131,7 +131,7 @@ For exampe, getting the `h`ead of an empty string (`""h`) returns a space.
 
 A value's **rank** is how many layers of list it's in: `int` and `char` are rank 0, `[int]` and `[char]` rank 1, and so on.
 
-When a operator is applied to an input has lower rank than it expects, it will automatically apply to each element of that input.
+When an operator is applied to an input that has higher rank than it expects, it will automatically apply to each element of that input, repeating this process until it reaches the expected rank.
 
 ```m4
 # negate (~) has type int → int
@@ -436,4 +436,509 @@ $$ C[n] = (C+[1,2,3,4])[n-1] = C[n-1] + [1,2,3,4][n-1]. $$
 Because vectorization stops at the end of the shortest
 of two lists, `C` is finite (its tail is as long as $[1,2,3,4]$ so it has length 5 itself).
 
-##
+## Taking a finite result
+
+The list defined by `i` needn't be calculated in full before we can use it. Lists are **lazy**: their elements are calculated as needed.
+
+```m4
+# Start with 1, repeatedly double, and keep eight elements.
+1i2*>8k
+# ==> [1,2,4,8,16,32,64,128]
+```
+
+Here `k` only asks for the first eight elements. The initial `1` counts as one of them, so only seven doublings are needed.
+
+The order of operations matters. `1i2*>8k_` sums those eight elements and returns `255`. Putting `_` before `8k` would ask for the sum of the entire infinite list. The later `k` cannot make that sum finite.
+
+The same issue applies to `s` (size), `l` (last), and `b` (reverse): they need to reach the end of their list. Take a finite prefix first when using these operations on an infinite list.
+
+### Repetition
+
+An even simpler infinite list is made by `r` (repeat):
+
+```m4
+7r5k
+# ==> [7,7,7,7,7]
+```
+
+There's a special promotion rule for `k`. When its first argument is a scalar, it is repeated rather than enclosed in a singleton list. Thus `7 5k` produces the same result.
+
+This doesn't mean that `k` pads an existing list. `1,2 5k` still only returns `[1,2]`.
+
+### Stopping at a condition
+
+Sometimes we know when to stop, but not how many elements we'll need. The operator `w` (takeWhile) takes a list of values and a list of conditions. It returns values up to, but not including, the first falsey condition.
+
+```m4
+# Keep powers of two while they are less than 100.
+1i2*>:100<w
+# ==> [1,2,4,8,16,32,64]
+```
+
+After `:`, we have two copies of the powers of two. `100<` turns the second into a list of comparisons: `[1,1,1,1,1,1,1,0,...]`. Then `w` uses those comparisons to choose where to stop.
+
+The related operator `v` (filter) skips falsey entries and continues looking:
+
+```m4
+# Keep odd numbers.
+1,2,3,4,5:2%v
+# ==> [1,3,5]
+
+# Stop at the first even number.
+1,2,3,4,5:2%w
+# ==> [1]
+```
+
+Both operations pair values with conditions and stop if either list ends. But only `w` stops at a falsey condition. Replacing `w` with `v` in the powers-of-two example would print the same seven numbers, then continue searching forever for another power below 100.
+
+## expand `e`
+
+For a cumulative sum, we often want the sums without the initial zero. We can remove it using `t` (tail):
+
+```m4
+0i1,2,3,4+>t
+# ==> [1,3,6,10]
+```
+
+The operator **expand** `e` provides a shorter way:
+
+```m4
+e1,2,3,4+>
+# ==> [1,3,6,10]
+```
+
+Unlike `i`, `e` takes no initial argument. It uses the element type's default value and leaves that initial value out of the result.
+
+For integer results, think of the value available inside the scope as `[0]` followed by the result being defined. If the result is `R`, this example says:
+
+$$
+R = ([0] \mathbin{\text{ followed by }} R) + [1,2,3,4].
+$$
+
+The first addition is `0+1`, the next is `1+2`, and so on. The finite list on the right limits `R` to four elements.
+
+```m4
+# Starting after the default 0, repeatedly add 1.
+e)>6k
+# ==> [1,2,3,4,5,6]
+
+# Starting after the default 0, repeatedly double.
+e2*>6k
+# ==> [0,0,0,0,0,0]
+```
+
+The second example is a reason to choose the initial value deliberately. `e` is convenient for sums, but `1i2*>` is what we need for powers of two.
+
+## Referring to the circular value
+
+Inside an iteration, `$` explicitly refers to the value provided by the currently enclosing function. For `i`, this is the list being defined, not just its most recent element. Vectorization is what makes ordinary arithmetic act on successive elements of that list.
+
+```m4
+# C starts at 0; each next element is (previous+1)+previous.
+0i)$+>6k
+# ==> [0,1,3,7,15,31]
+```
+
+Inside the scope, `)` gives `C+1`, `$` supplies `C` again, and `+` adds the two pointwise. So the recurrence is $C[n+1] = 2C[n]+1$.
+
+We can omit `$` here:
+
+```m4
+0i)+>6k
+# ==> [0,1,3,7,15,31]
+```
+
+The missing operand of `+` is supplied by the enclosing iteration. Writing `$` first can make such a program easier to understand before shortening it.
+
+### When `>` is omitted
+
+If an iteration has no matching `>`, the parser closes it as soon as a subsequent operation combines the iteration value into a single result. Further operations are outside that scope.
+
+```m4
+# The first ) closes the iteration; the second ) adds 1
+# to every element of the resulting list.
+0i))6k
+# ==> [1,2,3,4,5,6]
+
+# Both successors are inside the iteration.
+0i))>6k
+# ==> [0,2,4,6,8,10]
+```
+
+In the first program, the iteration itself is `[0,1,2,3,...]`. In the second, each step adds two. A closing `>` can therefore change the result even when the program was already valid without it.
+
+## Right folds `f`
+
+What if we only want the total sum? We already know how to calculate cumulative sums:
+
+```m4
+0i1,2,3,4+>
+# ==> [0,1,3,6,10]
+```
+
+Take the last result with `l` to get the final sum:
+
+```m4
+0i1,2,3,4+>l
+# ==> 10
+```
+
+A **right fold** `f` is a short way to do this, but it combines the elements from right to left. It takes an initial value for the end of the list:
+
+```m4
+# Add the numbers, using 0 as the initial value: (((0+4)+3)+2)+1
+0f1,2,3,4+>
+# ==> 10
+
+# Multiply the numbers, using 1 as the initial value.
+1f1,2,3,4*>
+# ==> 24
+```
+
+For these element-by-element calculations on finite lists, `f` gives the same result as iterating over the reversed input and taking the last result. The reason it seems to process the list in reverse is that it actually works a bit differently from `i`, so as to support **lazy** computations, as we'll see below.
+
+How `0f10,20,30,40+>` actually works is that it returns the head of a list like this:
+
+$$
+R = (\text{tail}(R) + [10,20,30,40]) \text{ padded by 0s}
+$$
+
+Through vectorization, this leads to the equations…
+
+```text
+R[0] = R[1] + 10
+R[1] = R[2] + 20
+R[2] = R[3] + 30
+R[3] =    0 + 40
+```
+
+The value returned is `R[0]`, which is `100`.
+
+Some equivalent Haskell (as Python is insufficiently lazy to port this example):
+
+```hs
+-- This is like `a ++ repeat v`, but written in a subtly different way
+-- that produces `something : something` before ever evaluating `a`, which
+-- lets Haskell evaluate the result below without infinitely recursing.
+pad :: [a] -> a -> [a]
+pad a v = h : pad t v
+  where (h,t) = if null a then (v,[]) else (head a,tail a)
+
+r :: [Integer]
+r = pad (zipWith (+) (tail r) [1,2,3,4]) 0
+
+main = print $ r!!0
+```
+
+### Argument order matters
+
+As with iteration, the placement of the "initial value + `f`" construct within its scope can vary.
+
+```m4
+1,2,3 0f->
+# ==> 2
+```
+
+Now we get the first element of this list:
+
+$$
+R = ([1,2,3] - \text{tail}(R)) \text{ padded by 0s}
+$$
+
+Essentially, we're supplying the function $[1,2,3] - \square$ to this "fold formula."
+
+Through vectorization, this leads to the equations…
+
+```text
+R[0] = 1 - R[1]
+R[1] = 2 - R[2]
+R[2] = 3 - 0
+```
+
+The result is $R[0] = 1-(2-(3-0)) = 2$.
+
+### Empty lists and default initial values
+
+The literal `nil` denotes an empty list. If there are no elements to combine, `f` returns its initial value:
+
+```m4
+17f nil +>
+# ==> 17
+```
+
+The operator `m` (meld) is the default-value version of a right fold. It takes no initial argument:
+
+```m4
+m1,2,3,4+>
+# ==> 10
+
+m1,2,3,4*>
+# ==> 0
+```
+
+For integers, that default is `0`. As with `e`, the default isn't necessarily the identity for the operation: use `1f` for a product.
+
+### Right folds and laziness
+
+Combining from right to left doesn't mean that `f` must *visit* the last element first. It only needs to calculate the later result if the current operation uses it. This lets a right fold return an answer even for an infinite list.
+
+As a (contrived) example, let's find the first nonzero number in `{`, the infinite list `[0,1,2,...]`. The operator `y` (ifElse) takes a condition and two alternatives: it returns the first alternative when the condition is truthy, and the second otherwise. It only evaluates the selected alternative.
+
+```m4
+# Use each number as both the condition and the first alternative.
+{ : 0f y>
+# ==> 1
+```
+
+The `:` duplicates the list. Inside `f`, `y` receives the current number as its condition and first alternative, and the folded result of the remaining numbers as its second alternative. So at each position, the rule is: return this number if it's nonzero; otherwise use the later result.
+
+```
+R[0] = if 0 then 0 else R[1]
+R[1] = if 1 then 1 else R[2]
+R[2] = if 2 then 2 else R[3]
+R[3] = ...
+```
+
+`R` is infinite, but we can compute `R[0]` lazily regardless: it evaluates to `R[1]`, which evaluates to `1`.
+
+# Controlling the rank of a calculation
+
+So far, our circular values have mostly been lists of integers. A list of lists introduces two distinct possibilities: several independent calculations, or one calculation whose state is itself a list.
+
+## Several scans at once
+
+Ordinary `i` can vectorize over a list of lists:
+
+```m4
+0i1,2,,3,4+>
+# ==> [[0,1,3],[0,3,7]]
+```
+
+Each row gets its own cumulative sum, starting at `0`. The outer list selects which scan we're doing; the inner list contains its successive results.
+
+## A list as the state
+
+To make one iteration whose initial value is a whole list, use `I`, or equivalently `i,`. One element of the resulting sequence is then a list.
+
+For example, we can calculate Fibonacci numbers by keeping two consecutive numbers as the state. The initial state is `[0,1]`, and the update is:
+
+```text
+[a,b] → [b,a+b]
+```
+
+Here's the complete program:
+
+```m4
+0,1I;t _ j a>8K
+# ==> [[0,1],[1,1],[1,2],[2,3],[3,5],[5,8],[8,13],[13,21]]
+```
+
+The spaces aren't required, but help separate the operations. Inside the scope, each operation acts on the sequence of states:
+
+| Code | Effect |
+| ---- | ------ |
+| `;t` | Keep a copy of the states, with `t` applied to the first copy: each `[a,b]` becomes `[b]`. |
+| `_` | Sum each pair in the second copy, giving `a+b`. |
+| `j` | Enclose each sum in a singleton list, giving `[a+b]`. |
+| `a` | Append the corresponding lists: `[b]` and `[a+b]` become `[b,a+b]`. |
+
+The small function after `;` is just `t`. The sum and append happen after that small function has closed, but remain inside the iteration closed by `>`.
+
+Notice the uppercase `K` at the end. The result has type `[[int]]`, and we want eight *states*. Lowercase `k` would instead keep up to eight integers within each state, leaving the sequence of states infinite.
+
+To extract the Fibonacci numbers, take the head of each state:
+
+```m4
+0,1I;t _ j a>8K h
+# ==> [0,1,1,2,3,5,8,13]
+```
+
+This time lowercase `h` is deliberate: it acts on each pair. Uppercase `H` would take the first pair from the outer list.
+
+## Building the right nesting
+
+The same distinction applies to `j` (just) and `r` (repeat):
+
+```m4
+# Enclose each integer separately.
+1,2j
+# ==> [[1],[2]]
+
+# Enclose the whole list.
+1,2J
+# ==> [[1,2]]
+
+# Repeat each integer; keep three from each repetition.
+1,2r3k
+# ==> [[1,1,1],[2,2,2]]
+
+# Repeat the whole list; keep three copies.
+1,2R3K
+# ==> [[1,2],[1,2],[1,2]]
+```
+
+Rank determines which value is treated as one element. It's useful to write down the types of intermediate values when a program produces the right numbers with the wrong nesting.
+
+## Broadcasting across rows or columns
+
+Adding a vector to a matrix has a subtle default:
+
+```m4
+10,20,,30,40 1,2+
+# ==> [[11,21],[32,42]]
+```
+
+The first offset, `1`, is added to every entry of the first row. The second offset, `2`, is added to every entry of the second row.
+
+Both operands of `+` are expected to be scalars. At the outermost level, the first row is paired with `1`, and the second row with `2`. Within each pair, the scalar is repeated to match the row.
+
+To add `[1,2]` to *each* row, repeat the whole offset list explicitly:
+
+```m4
+10,20,,30,40 1,2R+
+# ==> [[11,22],[31,42]]
+```
+
+Now both arguments are lists of rows. Corresponding rows are paired first, then corresponding integers within them. The infinite repetition is harmless here: addition stops when the finite matrix ends.
+
+<!--
+## Padding outer lists with `superpad`
+
+There's one more detail behind vectorized circular programming: the list available inside a scope can have extra empty lists beyond the end of the result. The interpreter adds these using an operation called **superpad**.
+
+### Padding one level
+
+First, consider `z` (padDefault). It extends a list indefinitely with the default value of its element type:
+
+```m4
+# Pad each list of integers with zeros.
+1,2,,3 z 4k
+# ==> [[1,2,0,0],[3,0,0,0]]
+
+# Pad the outer list with empty lists instead.
+1,2,,3 Z 5K
+# ==> [[1,2],[3],[],[],[]]
+```
+
+Lowercase `z` acts on each row. Uppercase `Z` acts on the list of rows, whose elements are lists and therefore have `[]` as their default value. Neither changes an existing element; they only add values after the end.
+
+### Padding every outer level
+
+`superpad` pads every list level **except the innermost one**. On a list of integers, it does nothing:
+
+```m4
+1,2,3 superpad
+# ==> [1,2,3]
+```
+
+On a list of lists of integers, it has the same effect as `Z`: it adds empty rows, but leaves the integers in each row alone.
+
+```m4
+1,2,,3 superpad 5K
+# ==> [[1,2],[3],[],[],[]]
+```
+
+At rank 3, it pads both outer levels. We need to limit both to print a finite result:
+
+```m4
+1,2,,3,,,4 superpad 3K, 3K
+# ==> [[[1,2],[3],[]],[[4],[],[]],[[],[],[]]]
+```
+
+The input is `[[[1,2],[3]],[[4]]]`. Each existing group gets infinitely many empty rows, and the outer list gets infinitely many additional groups. Each additional group also gets empty rows. The innermost lists `[1,2]`, `[3]`, and `[4]` remain finite and unchanged.
+
+Here `3K,` keeps three groups, and `3K` keeps three rows within each group. Taking only three groups would still leave infinitely many rows to print.
+
+Like other rank-sensitive operations, `superpad` accepts commas. Each comma protects one more inner level from padding:
+
+```m4
+1,2,,3,,,4 superpad, 3K,
+# ==> [[[1,2],[3]],[[4]],[]]
+```
+
+In this rank-3 example, `superpad,` pads only the outermost list. The existing groups keep their original numbers of rows, and the new groups are empty.
+
+### The padded value inside an iteration
+
+The interpreter inserts `superpad` when translating `i`, `e`, `f`, and `m`. Its rank is adjusted to the circular operator: `i` leaves the innermost list alone, `I` leaves the two innermost levels alone, and so on. Only the extra outer levels introduced by vectorization are padded.
+
+For our example of two independent scans, the final result still has two rows:
+
+```m4
+0i1,2,,3,4+>4K
+# ==> [[0,1,3],[0,3,7]]
+```
+
+But we can use `set` to retain the value supplied *inside* the iteration and inspect that instead:
+
+```m4
+0i set scans 1,2,,3,4+> del scans 4K
+# ==> [[0,1,3],[0,3,7],[],[]]
+```
+
+`set scans` names the padded circular value. After `>`, `del` discards the ordinary result, and `scans 4K` takes four rows from the saved value. The first two rows contain the same cumulative sums; further rows are empty.
+
+This padding supplies defaults when an expression inside the scope asks for additional outer elements. It doesn't force those elements into the final result: the finite operand `1,2,,3,4` still limits the addition to two rows. It also doesn't add zeros to the individual scans, which are at the innermost list level.
+
+Usually we don't need to write `superpad` ourselves. It explains why a value captured inside a circular scope can differ from the result at `>`, and why taking a finite prefix at just one level may not be enough to print it.
+-->
+
+# Reading types and overloaded operators
+
+## Inspecting intermediate values
+
+Two long-name operators are useful while developing a program:
+
+* `show` converts an entire value to a string showing its structure, including brackets and quotes.
+* `type` returns its inferred type as a string.
+
+Neither auto-vectorizes. They describe the whole value:
+
+```m4
+1,2,,3 show
+# Prints: [[1,2],[3]]
+
+1,2,,3 type
+# Prints: [[int]]
+```
+
+The `# ==>` comments in this part of the guide use this structural notation. Normal output still uses the formatting described under _Output formatting_. To see structural output for every result when running the downloaded Ruby interpreter, use its `-p` option:
+
+```bash
+ruby iogii/src/main.rb -p example.iog
+```
+
+`show` must examine the value to describe its contents. Take a finite prefix before showing an infinite list. `type` only needs the inferred type:
+
+```m4
+1i2*> type
+# Prints: [int]
+```
+
+## Short and long names
+
+In golf, and in this guide, we've used short names like `h` instead of long names like `head`. These short names have **overloads** selected by type and rank.
+
+```m4
+5h
+# ==> 32
+
+5,6h
+# ==> 5
+```
+
+It doesn't make sense to take the head of an integer, so on a scalar integer, `h` means `powOf2`. On a list of integers, it means `head`.
+
+Use a long name to make the intended operation explicit while working:
+
+```m4
+5 powOf2
+# ==> 32
+
+5,6 head
+# ==> 5
+```
+
+This also reveals a limit of automatic promotion. `head` does **not** promote a scalar: `5 head` is a rank error. If a singleton list is what we want, we can make it explicitly with `j`.
+
+The interpreter first selects compatible operations and solves the types and ranks of the whole expression, including circular dependencies. Evaluation then calculates the values those operations produce. When a short program is surprising, checking `type`, using long names, and making `>` explicit helps distinguish an operation-selection problem from an unexpected recurrence.

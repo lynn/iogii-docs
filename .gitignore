@@ -2,3 +2,4 @@ _manuscript
 
 /.quarto/
 **/*.quarto_ipynb
+/iogii/

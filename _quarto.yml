@@ -1,5 +1,7 @@
 project:
   type: manuscript
+  render:
+    - index.qmd
 
 manuscript:
   article: index.qmd
@@ -19,6 +21,5 @@ format:
 
 execute:
   freeze: true
-
 
 
